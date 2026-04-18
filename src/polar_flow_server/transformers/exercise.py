@@ -29,6 +29,7 @@ class ExerciseTransformer:
     - maximum_heart_rate -> max_heart_rate (computed property, RENAMED)
     - calories -> calories
     - training_load -> training_load
+    - muscle_load -> muscle_load (derived if available)
     - has_route -> has_route
     """
 
@@ -59,5 +60,6 @@ class ExerciseTransformer:
             "max_heart_rate": sdk_exercise.maximum_heart_rate,
             "calories": sdk_exercise.calories,
             "training_load": sdk_exercise.training_load,
+            "muscle_load": getattr(sdk_exercise, "muscle_load", None),
             "has_route": sdk_exercise.has_route,
         }

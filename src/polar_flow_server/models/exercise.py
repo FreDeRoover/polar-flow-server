@@ -75,6 +75,9 @@ class Exercise(Base, UserScopedMixin, TimestampMixin):
     average_power: Mapped[float | None] = mapped_column(Float)
     max_power: Mapped[int | None] = mapped_column(Integer)
 
+    # WHOOP-style metrics
+    muscle_load: Mapped[float | None] = mapped_column(Float, comment="Estimated musculoskeletal stress")
+
     # Notes/description
     notes: Mapped[str | None] = mapped_column(Text)
 
@@ -125,6 +128,7 @@ class Exercise(Base, UserScopedMixin, TimestampMixin):
             max_cadence=data.get("max_cadence"),
             average_power=data.get("average_power"),
             max_power=data.get("max_power"),
+            muscle_load=data.get("muscle_load"),
             notes=data.get("notes"),
             has_route=data.get("has_route", False),
         )

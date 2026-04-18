@@ -1,9 +1,9 @@
 """User model for storing OAuth connections."""
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, String, Text
+from sqlalchemy import Date, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from polar_flow_server.models.base import Base, TimestampMixin, generate_uuid
@@ -45,6 +45,11 @@ class User(Base, TimestampMixin):
     email: Mapped[str | None] = mapped_column(String(255))
     first_name: Mapped[str | None] = mapped_column(String(255))
     last_name: Mapped[str | None] = mapped_column(String(255))
+
+    # Physical stats for WHOOP-style metrics
+    birth_date: Mapped[date | None] = mapped_column(Date)
+    max_hr: Mapped[int | None] = mapped_column(Integer)
+    vo2_max: Mapped[int | None] = mapped_column(Integer)
 
     # Connection status
     is_active: Mapped[bool] = mapped_column(default=True)
