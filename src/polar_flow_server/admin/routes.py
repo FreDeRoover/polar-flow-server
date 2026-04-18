@@ -738,6 +738,13 @@ async def admin_dashboard(
     activity_result = await session.execute(latest_activity_stmt)
     latest_activity = activity_result.scalar_one_or_none()
 
+    # Get latest SleepWise Bedtime
+    latest_bedtime_stmt = (
+        select(SleepWiseBedtime).order_by(SleepWiseBedtime.period_start_time.desc()).limit(1)
+    )
+    latest_bedtime_result = await session.execute(latest_bedtime_stmt)
+    latest_bedtime = latest_bedtime_result.scalar_one_or_none()
+
     # Get latest breathing rate from Nightly Recharge
     latest_breathing_rate = None
     breathing_stmt = (
@@ -767,6 +774,77 @@ async def admin_dashboard(
         recharge=latest_recharge,
         cardio=latest_cardio,
     )
+
+    # Get connected user
+    connected_user_stmt = select(User).where(User.is_active == True).limit(1)  # noqa: E712
+    connected_user_result = await session.execute(connected_user_stmt)
+    connected_user = connected_user_result.scalar_one_or_none()
+
+    # WHOOP-style metric calculations
+    whoop_metrics = {
+        "strain": 0.0,
+        "muscle_load": 0.0,
+        "whoop_age": None,
+        "pace_of_aging": "Stable",
+        "sleep_performance": 0,
+        "hrv_status": "Normal",
+    }
+
+    if latest_cardio and latest_cardio.strain:
+        # Polar strain is often in a similar range but we can normalize it
+        # Polar Cardio Load Strain is usually 0-100+, while WHOOP is 0-21.
+        # This is a heuristic mapping.
+        whoop_metrics["strain"] = min(21.0, (latest_cardio.strain / 10.0))
+
+    # Calculate Muscular Load from today's exercises
+    today = date.today()
+    current_user_id = connected_user.polar_user_id if connected_user else "none"
+    exercise_stmt = select(Exercise).where(
+        Exercise.user_id == current_user_id,
+        func.date(Exercise.start_time) == today
+    )
+    today_exercises_result = await session.execute(exercise_stmt)
+    today_exercises = today_exercises_result.scalars().all()
+    whoop_metrics["muscle_load"] = sum(e.muscle_load or 0.0 for e in today_exercises)
+
+    # WHOOP Age Calculation (Physiological Age)
+    if connected_user and connected_user.birth_date and latest_hrv:
+        # Heuristic formula for physiological age
+        # Age = Chronological Age + (Baseline_HRV - Current_HRV) / Factor
+        chrono_age = (today - connected_user.birth_date).days / 365.25
+
+        # Get baseline HRV
+        baseline_hrv_stmt = select(UserBaseline).where(
+            UserBaseline.user_id == connected_user.polar_user_id,
+            UserBaseline.metric_name == "hrv_rmssd"
+        )
+        baseline_hrv_record_result = await session.execute(baseline_hrv_stmt)
+        baseline_hrv_record = baseline_hrv_record_result.scalar_one_or_none()
+
+        if baseline_hrv_record and baseline_hrv_record.baseline_value:
+            hrv_diff = baseline_hrv_record.baseline_value - latest_hrv
+            # If HRV is lower than baseline, you're "older"
+            whoop_metrics["whoop_age"] = round(chrono_age + (hrv_diff / 5.0), 1)
+
+            if latest_hrv < baseline_hrv_record.baseline_value * 0.9:
+                whoop_metrics["hrv_status"] = "Low"
+            elif latest_hrv > baseline_hrv_record.baseline_value * 1.1:
+                whoop_metrics["hrv_status"] = "High"
+
+        # Pace of Aging (30-day trend of WHOOP Age)
+        if baseline_hrv_record and baseline_hrv_record.baseline_30d:
+             diff_30d = (
+                 (baseline_hrv_record.baseline_7d - baseline_hrv_record.baseline_30d)
+                 if baseline_hrv_record.baseline_7d else 0
+             )
+             if diff_30d > 2:
+                 whoop_metrics["pace_of_aging"] = "Slowing"
+             elif diff_30d < -2:
+                 whoop_metrics["pace_of_aging"] = "Accelerating"
+
+    # Sleep Performance
+    if recent_sleep and recent_sleep[0].sleep_score:
+        whoop_metrics["sleep_performance"] = recent_sleep[0].sleep_score
 
     # Get API keys data
     api_keys_stmt = select(APIKey).order_by(APIKey.created_at.desc())
@@ -809,11 +887,6 @@ async def admin_dashboard(
     # Get analytics data: baselines and patterns for the connected user
     user_baselines: list[UserBaseline] = []
     user_patterns: list[PatternAnalysis] = []
-
-    # Get connected user
-    connected_user_stmt = select(User).where(User.is_active == True).limit(1)  # noqa: E712
-    connected_user_result = await session.execute(connected_user_stmt)
-    connected_user = connected_user_result.scalar_one_or_none()
 
     if connected_user:
         # Fetch baselines for this user
@@ -866,6 +939,7 @@ async def admin_dashboard(
             "latest_spo2": latest_spo2,
             "latest_skin_temp": latest_skin_temp,
             "latest_activity": latest_activity,
+            "latest_bedtime": latest_bedtime,
             "latest_breathing_rate": latest_breathing_rate,
             # Recovery
             "recovery_status": recovery_status,
@@ -876,6 +950,8 @@ async def admin_dashboard(
             "scheduler_status": scheduler_status,
             "recent_sync_logs": recent_sync_logs,
             "sync_stats": sync_stats,
+            # WHOOP Metrics
+            "whoop": whoop_metrics,
             # Analytics
             "user_baselines": user_baselines,
             "user_patterns": user_patterns,
@@ -1202,6 +1278,57 @@ async def reset_oauth_credentials(
         return Template(
             template_name="admin/partials/oauth_reset_success.html",
             context={},
+        )
+
+    except Exception as e:
+        await session.rollback()
+        return Template(
+            template_name="admin/partials/sync_error.html",
+            context={"error": f"Failed to update profile: {str(e)}"},
+        )
+
+
+@post("/settings/profile", sync_to_thread=False, status_code=HTTP_200_OK)
+async def update_user_profile(
+    request: Request[Any, Any, Any],
+    session: AsyncSession,
+) -> Template:
+    """Update user physical profile settings."""
+    if not is_authenticated(request):
+        return Template(
+            template_name="admin/partials/sync_error.html",
+            context={"error": "Authentication required. Please log in."},
+        )
+
+    try:
+        # Get connected user
+        stmt = select(User).where(User.is_active == True).limit(1)  # noqa: E712
+        result = await session.execute(stmt)
+        user = result.scalar_one_or_none()
+
+        if not user:
+            return Template(
+                template_name="admin/partials/sync_error.html",
+                context={"error": "No connected user found."},
+            )
+
+        form_data = await request.form()
+        birth_date_str = form_data.get("birth_date")
+        max_hr = form_data.get("max_hr")
+        vo2_max = form_data.get("vo2_max")
+
+        if birth_date_str:
+            user.birth_date = date.fromisoformat(str(birth_date_str))
+        if max_hr:
+            user.max_hr = int(str(max_hr))
+        if vo2_max:
+            user.vo2_max = int(str(vo2_max))
+
+        await session.commit()
+
+        return Template(
+            template_name="admin/partials/sync_success.html",
+            context={"results": {"profile": 1}},
         )
 
     except Exception as e:
@@ -1791,6 +1918,7 @@ admin_routes = [
     oauth_authorize,
     admin_settings,
     reset_oauth_credentials,
+    update_user_profile,
     # API Key management
     admin_regenerate_api_key,
     admin_revoke_api_key,

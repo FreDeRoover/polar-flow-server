@@ -122,6 +122,34 @@
                     </p>
                 </div>
             </div>
+
+            <!-- Physical Profile -->
+            <div class="mt-6 border-t pt-6">
+                <h3 class="text-md font-semibold text-gray-800 mb-4">Physical Profile (for WHOOP Metrics)</h3>
+                <form hx-post="/admin/settings/profile" hx-target="#profile-result" hx-swap="innerHTML" class="space-y-4">
+                    {% if csrf_token %}<input type="hidden" name="_csrf_token" value="{{ csrf_token }}">{% endif %}
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 uppercase">Birth Date</label>
+                            <input type="date" name="birth_date" value="{{ connected_user.birth_date or '' }}" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 uppercase">Max HR (bpm)</label>
+                            <input type="number" name="max_hr" value="{{ connected_user.max_hr or '' }}" placeholder="e.g. 190" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 uppercase">VO2 Max</label>
+                            <input type="number" name="vo2_max" value="{{ connected_user.vo2_max or '' }}" placeholder="e.g. 50" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm">
+                        </div>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <button type="submit" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700">
+                            Save Profile
+                        </button>
+                        <div id="profile-result"></div>
+                    </div>
+                </form>
+            </div>
         </div>
         {% else %}
         <div class="p-4 bg-gray-50 rounded-lg border border-gray-200">
